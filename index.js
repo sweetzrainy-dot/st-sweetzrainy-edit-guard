@@ -37,10 +37,8 @@ jQuery(async () => {
     if (history[key].length > MAX_HISTORY) history[key].pop();
   }
 
-  // 创建工具栏
   const bar = D.createElement('div');
   bar.id = 'edit-guard-bar';
-  // 初始位置，每次聚焦时会动态计算
   bar.style.cssText = `
     position: fixed; display: none; gap: 10px; align-items: center;
     background: ${BAR_BG}; backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
@@ -60,23 +58,18 @@ jQuery(async () => {
   bar.appendChild(saveBtn);
   D.body.appendChild(bar);
 
-  // ⭐ 核心：智能定位逻辑
+  // ⭐ 智能定位：悬浮在输入框上方（正好是“删除键那一排”的位置）
   function positionBar(el) {
     if (!el) return;
     const rect = el.getBoundingClientRect();
-    const barWidth = 150; // 预估胶囊宽度
-    const barHeight = 40; // 预估胶囊高度
+    const barWidth = 150; 
+    const barHeight = 40; 
     
-    // 默认放在输入框正上方 10px 处
-    let top = rect.top - barHeight - 10;
-    // 如果上方空间不够（比如输入框在屏幕最上面），就放到输入框下方
-    if (top < 10) top = rect.bottom + 10;
+    let top = rect.top - barHeight - 10; // 优先放在上方
+    if (top < 10) top = rect.bottom + 10; // 上方没空间就放下方
     
-    // 左右定位：默认与输入框左对齐，但如果撞到右边缘，就向左缩
     let left = rect.left;
-    if (left + barWidth > window.innerWidth) {
-      left = window.innerWidth - barWidth - 10;
-    }
+    if (left + barWidth > window.innerWidth) left = window.innerWidth - barWidth - 10;
     if (left < 10) left = 10;
 
     bar.style.top = `${top}px`;
@@ -84,7 +77,7 @@ jQuery(async () => {
     bar.style.display = 'flex';
   }
 
-  // 监听事件
+  // ⚠️ 核心变动：全部加上 { capture: true }，突破防误触脚本的拦截
   D.addEventListener('focusin', (e) => {
     const el = e.target;
     if (!el || (el.tagName !== 'TEXTAREA' && el.type !== 'text') || el.id === 'send_textarea') return;
@@ -93,31 +86,29 @@ jQuery(async () => {
     const key = getKey(el);
     if (!history[key] || history[key].length === 0) pushHistory(key, el.value);
     
-    positionBar(el); // 每次聚焦时，重新计算并定位到当前输入框旁
-  });
+    positionBar(el); 
+  }, true); // <-- 捕获阶段
 
   D.addEventListener('input', (e) => {
     const el = e.target;
     if (!el || el !== activeEl || el.id === 'send_textarea') return;
     clearTimeout(saveTimer);
     saveTimer = setTimeout(() => pushHistory(getKey(el), el.value), DEBOUNCE_TIME);
-  });
+  }, true); // <-- 捕获阶段
 
   D.addEventListener('focusout', (e) => {
     const el = e.target;
     if (!el || el !== activeEl || el.id === 'send_textarea') return;
     pushHistory(getKey(el), el.value);
     
-    // 延迟隐藏，防止用户点击胶囊上的按钮时它直接消失
     setTimeout(() => {
       if (D.activeElement !== undoBtn && D.activeElement !== saveBtn && D.activeElement !== activeEl) {
         bar.style.display = 'none';
         activeEl = null;
       }
     }, 200);
-  });
+  }, true); // <-- 捕获阶段
 
-  // 撤销和保存逻辑
   undoBtn.addEventListener('pointerdown', (e) => e.preventDefault());
   undoBtn.addEventListener('click', () => {
     if (!activeEl) return;
@@ -142,7 +133,6 @@ jQuery(async () => {
     if (context.toastr && context.toastr.success) context.toastr.success('已触发底层保存', '编辑保镖');
   });
 
-  // 窗口变化时重新定位（比如手机键盘弹出/收起时）
   window.addEventListener('resize', () => {
     if (activeEl && bar.style.display !== 'none') positionBar(activeEl);
   });
