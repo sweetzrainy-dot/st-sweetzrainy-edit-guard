@@ -1,0 +1,9 @@
+{
+  "display_name": "智能编辑保镖",
+  "loading_order": 100,
+  "requires": [],
+  "optional": [],
+  "js": "index.js",
+  "author": "sweetzrainy-dot",
+  "version": "1.0.0"
+}
