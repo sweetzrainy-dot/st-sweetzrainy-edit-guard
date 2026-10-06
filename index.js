@@ -1,7 +1,12 @@
 jQuery(async () => {
+  console.log("[智能编辑保镖] 扩展已成功加载！");
   const { getContext } = SillyTavern;
   const context = getContext();
   const D = document;
+  
+  if (context.toastr && context.toastr.success) {
+    context.toastr.success('智能编辑保镖已启动，去文本框试试！', '扩展加载');
+  }
 
   // ══════════════════════════════════════════════
   // 🎨 【自定义样式控制台】换主题只改这里！
