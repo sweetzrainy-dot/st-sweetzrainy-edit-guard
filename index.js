@@ -4,33 +4,16 @@ jQuery(async () => {
   const context = getContext();
   const D = document;
   
-  if (context.toastr && context.toastr.success) {
-    context.toastr.success('智能编辑保镖已启动，去文本框试试！', '扩展加载');
-  }
-
   // ══════════════════════════════════════════════
-  // 🎨 【自定义样式控制台】换主题只改这里！
+  // 🎨 自定义样式控制台
   // ══════════════════════════════════════════════
-  const CONFIG = {
-    BAR_BG: 'rgba(30, 24, 18, 0.85)',
-    BAR_BORDER: '1px solid rgba(192, 160, 128, 0.6)',
-    BAR_RADIUS: '30px',
-    BAR_SHADOW: '0 4px 12px rgba(0,0,0,0.5)',
-    TEXT_COLOR: '#F0E6DA',
-    ACCENT_COLOR: '#c0a080',
-    HOVER_BG: 'rgba(192, 160, 128, 0.2)',
-    FONT_SIZE: '14px',
-    ICON_SIZE: '18px',
-    POS_BOTTOM: '90px',
-    POS_LEFT: '50%',
-    TRANSFORM_X: 'translateX(-50%)',
-    ICON_UNDO: '↶',
-    TEXT_UNDO: '撤销',
-    ICON_SAVE: '💾',
-    TEXT_SAVE: '保存',
-    MAX_HISTORY: 30,
-    DEBOUNCE_TIME: 1500
-  };
+  const BAR_BG = 'rgba(30, 24, 18, 0.9)';
+  const BAR_BORDER = '1px solid rgba(192, 160, 128, 0.6)';
+  const TEXT_COLOR = '#F0E6DA';
+  const ACCENT_COLOR = '#c0a080';
+  const MAX_HISTORY = 30;
+  const DEBOUNCE_TIME = 1500;
+  // ====================
 
   let activeEl = null;
   let history = {};
@@ -51,58 +34,81 @@ jQuery(async () => {
     if (!history[key]) history[key] = [];
     if (history[key].length && history[key][0] === value) return;
     history[key].unshift(value);
-    if (history[key].length > CONFIG.MAX_HISTORY) history[key].pop();
+    if (history[key].length > MAX_HISTORY) history[key].pop();
   }
 
+  // 创建工具栏
   const bar = D.createElement('div');
   bar.id = 'edit-guard-bar';
+  // 初始位置，每次聚焦时会动态计算
   bar.style.cssText = `
-    position: fixed; bottom: ${CONFIG.POS_BOTTOM}; left: ${CONFIG.POS_LEFT}; transform: ${CONFIG.TRANSFORM_X};
-    background: ${CONFIG.BAR_BG}; backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
-    border: ${CONFIG.BAR_BORDER}; border-radius: ${CONFIG.BAR_RADIUS};
-    padding: 6px 12px; display: none; gap: 10px; align-items: center;
-    z-index: 2147483647; box-shadow: ${CONFIG.BAR_SHADOW};
-    transition: opacity 0.2s ease;
+    position: fixed; display: none; gap: 10px; align-items: center;
+    background: ${BAR_BG}; backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+    border: ${BAR_BORDER}; border-radius: 30px; padding: 6px 12px;
+    z-index: 2147483647; box-shadow: 0 4px 12px rgba(0,0,0,0.5); transition: opacity 0.2s ease;
   `;
 
   const undoBtn = D.createElement('div');
-  undoBtn.innerHTML = `<span style="font-size:${CONFIG.ICON_SIZE};">${CONFIG.ICON_UNDO}</span> ${CONFIG.TEXT_UNDO}`;
-  undoBtn.style.cssText = `color: ${CONFIG.TEXT_COLOR}; cursor: pointer; padding: 6px 10px; font-size: ${CONFIG.FONT_SIZE}; border-radius: 20px; transition: background 0.2s;`;
+  undoBtn.innerHTML = '↶ 撤销';
+  undoBtn.style.cssText = `color: ${TEXT_COLOR}; cursor: pointer; padding: 6px 10px; font-size: 14px; border-radius: 20px;`;
   
   const saveBtn = D.createElement('div');
-  saveBtn.innerHTML = `<span style="font-size:${CONFIG.ICON_SIZE};">${CONFIG.ICON_SAVE}</span> ${CONFIG.TEXT_SAVE}`;
-  saveBtn.style.cssText = `color: ${CONFIG.ACCENT_COLOR}; font-weight: bold; cursor: pointer; padding: 6px 10px; font-size: ${CONFIG.FONT_SIZE}; border-radius: 20px; transition: background 0.2s;`;
+  saveBtn.innerHTML = '💾 保存';
+  saveBtn.style.cssText = `color: ${ACCENT_COLOR}; font-weight: bold; cursor: pointer; padding: 6px 10px; font-size: 14px; border-radius: 20px;`;
 
   bar.appendChild(undoBtn);
   bar.appendChild(saveBtn);
   D.body.appendChild(bar);
 
-  undoBtn.onmouseover = () => undoBtn.style.background = CONFIG.HOVER_BG;
-  undoBtn.onmouseout = () => undoBtn.style.background = 'transparent';
-  saveBtn.onmouseover = () => saveBtn.style.background = CONFIG.HOVER_BG;
-  saveBtn.onmouseout = () => saveBtn.style.background = 'transparent';
+  // ⭐ 核心：智能定位逻辑
+  function positionBar(el) {
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    const barWidth = 150; // 预估胶囊宽度
+    const barHeight = 40; // 预估胶囊高度
+    
+    // 默认放在输入框正上方 10px 处
+    let top = rect.top - barHeight - 10;
+    // 如果上方空间不够（比如输入框在屏幕最上面），就放到输入框下方
+    if (top < 10) top = rect.bottom + 10;
+    
+    // 左右定位：默认与输入框左对齐，但如果撞到右边缘，就向左缩
+    let left = rect.left;
+    if (left + barWidth > window.innerWidth) {
+      left = window.innerWidth - barWidth - 10;
+    }
+    if (left < 10) left = 10;
 
+    bar.style.top = `${top}px`;
+    bar.style.left = `${left}px`;
+    bar.style.display = 'flex';
+  }
+
+  // 监听事件
   D.addEventListener('focusin', (e) => {
     const el = e.target;
-    if (!el || (el.tagName !== 'TEXTAREA' && el.type !== 'text')) return;
-    if (el.id === 'send_textarea') return;
+    if (!el || (el.tagName !== 'TEXTAREA' && el.type !== 'text') || el.id === 'send_textarea') return;
+    
     activeEl = el;
     const key = getKey(el);
     if (!history[key] || history[key].length === 0) pushHistory(key, el.value);
-    bar.style.display = 'flex';
+    
+    positionBar(el); // 每次聚焦时，重新计算并定位到当前输入框旁
   });
 
   D.addEventListener('input', (e) => {
     const el = e.target;
     if (!el || el !== activeEl || el.id === 'send_textarea') return;
     clearTimeout(saveTimer);
-    saveTimer = setTimeout(() => pushHistory(getKey(el), el.value), CONFIG.DEBOUNCE_TIME);
+    saveTimer = setTimeout(() => pushHistory(getKey(el), el.value), DEBOUNCE_TIME);
   });
 
   D.addEventListener('focusout', (e) => {
     const el = e.target;
     if (!el || el !== activeEl || el.id === 'send_textarea') return;
     pushHistory(getKey(el), el.value);
+    
+    // 延迟隐藏，防止用户点击胶囊上的按钮时它直接消失
     setTimeout(() => {
       if (D.activeElement !== undoBtn && D.activeElement !== saveBtn && D.activeElement !== activeEl) {
         bar.style.display = 'none';
@@ -111,6 +117,7 @@ jQuery(async () => {
     }, 200);
   });
 
+  // 撤销和保存逻辑
   undoBtn.addEventListener('pointerdown', (e) => e.preventDefault());
   undoBtn.addEventListener('click', () => {
     if (!activeEl) return;
@@ -131,7 +138,12 @@ jQuery(async () => {
     if (!activeEl) return;
     activeEl.dispatchEvent(new Event('input', { bubbles: true }));
     activeEl.dispatchEvent(new Event('change', { bubbles: true }));
-    context.saveSettingsDebounced();
+    if (context.saveSettingsDebounced) context.saveSettingsDebounced();
     if (context.toastr && context.toastr.success) context.toastr.success('已触发底层保存', '编辑保镖');
+  });
+
+  // 窗口变化时重新定位（比如手机键盘弹出/收起时）
+  window.addEventListener('resize', () => {
+    if (activeEl && bar.style.display !== 'none') positionBar(activeEl);
   });
 });
