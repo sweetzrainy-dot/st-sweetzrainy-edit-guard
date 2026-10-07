@@ -1,5 +1,5 @@
 jQuery(async () => {
-  console.log('[编辑保镖] v3 已加载');
+  console.log('[编辑保镖] v3.1 已加载');
   const D = document;
   const MAX_HISTORY = 50;      // 每个文本框最多保留的历史版本数
   const DEBOUNCE = 1200;       // 停止输入多久后记一个版本(毫秒)
@@ -130,16 +130,25 @@ jQuery(async () => {
   //  anchor  = 紧挨原生放大键右边
   //  below   = 放大弹窗(里面只有这一个框) → 框下方右侧
   //  above   = 其他弹窗里没有放大键的框(如正则) → 框上方右侧
+  function isOverlay(ta) {
+    const dlg = ta.closest('dialog, .popup');
+    if (!dlg || ta.readOnly) return false;
+    const pos = getComputedStyle(ta).position;
+    return (pos === 'absolute' || pos === 'fixed') && ta.getBoundingClientRect().height > window.innerHeight * 0.5;
+  }
+
+  // 弹窗里只要有看得见的原生放大键，就只认「放大键旁边」这一种位置，避免位置来回跳
+  function dialogHasMaximize(dlg) {
+    return Array.from(dlg.querySelectorAll('.editor_maximize')).some(isVisible);
+  }
+
   function computePlacement(ta) {
     const dlg = ta.closest('dialog, .popup');
     const r = ta.getBoundingClientRect();
-    const pos = getComputedStyle(ta).position;
-    if (dlg && !ta.readOnly && (pos === 'absolute' || pos === 'fixed') && r.height > window.innerHeight * 0.5) {
-      return { mode: 'overlay' };
-    }
+    if (isOverlay(ta)) return { mode: 'overlay' };
     const a = findAnchor(ta);
     if (a) return { mode: 'anchor', ref: a };
-    if (dlg && !ta.readOnly) {
+    if (dlg && !ta.readOnly && !dialogHasMaximize(dlg)) {
       const vis = Array.from(dlg.querySelectorAll('textarea')).filter((t) => eligible(t) && isVisible(t));
       if (vis.length === 1) return { mode: 'below' };
       if (r.height >= 70) return { mode: 'above' };
@@ -178,6 +187,13 @@ jQuery(async () => {
 
   function place(st) {
     const ta = st.el;
+
+    // 已经挂在放大键旁边的，只要放大键还在、框没变成大浮层，就不再重新计算(防止时有时无)
+    if (st.mode === 'anchor' && st.group && st.group.isConnected && !isOverlay(ta)) {
+      const prev = st.group.previousElementSibling;
+      if (prev && prev.classList.contains('editor_maximize') && isVisible(prev)) return;
+    }
+
     const p = computePlacement(ta);
     if (!p) { removeGroup(st); return; }
 
