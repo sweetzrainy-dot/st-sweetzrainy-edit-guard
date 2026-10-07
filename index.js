@@ -1,8 +1,9 @@
 jQuery(async () => {
-  console.log('[编辑保镖] v2 已加载');
+  console.log('[编辑保镖] v3 已加载');
   const D = document;
   const MAX_HISTORY = 50;      // 每个文本框最多保留的历史版本数
   const DEBOUNCE = 1200;       // 停止输入多久后记一个版本(毫秒)
+  const SCAN_INTERVAL = 1000;  // 多久检查一次界面变化(毫秒)
 
   const getCtx = () => { try { return SillyTavern.getContext(); } catch (e) { return {}; } };
   const toast = (type, msg) => {
@@ -10,15 +11,17 @@ jQuery(async () => {
     if (t && t[type]) t[type](msg, undefined, { timeOut: 1200 });
   };
 
-  // ───────── 样式：沿用酒馆原生的 right_menu_button，只补一点间距和反馈色 ─────────
+  // ───────── 样式：沿用酒馆原生的 right_menu_button，只补间距和反馈色 ─────────
   const style = D.createElement('style');
   style.textContent = `
-    .eg-group { display: inline-flex; align-items: center; gap: 2px; margin-left: 6px; flex: 0 0 auto; vertical-align: middle; }
-    .eg-btn { cursor: pointer; padding: 5px 7px; font-size: 15px; touch-action: manipulation;
+    .eg-group { display: inline-flex; align-items: center; gap: 0; margin-left: 4px; flex: 0 0 auto; vertical-align: middle; }
+    .eg-btn { cursor: pointer; padding: 4px 6px; font-size: 14px; touch-action: manipulation;
               -webkit-tap-highlight-color: transparent; user-select: none; -webkit-user-select: none; transition: opacity .15s, color .15s; }
     .eg-btn.eg-off { opacity: .3; }
     .eg-btn.eg-ok { color: #7ddc8a !important; opacity: 1 !important; }
-    .eg-row { display: flex; justify-content: flex-end; margin: 2px 0; }
+    .eg-group.eg-row { display: flex; justify-content: flex-end; margin: 2px 0; }
+    .eg-group.eg-float { position: absolute; z-index: 10; margin: 0; padding: 2px 6px; border-radius: 18px;
+                         background: rgba(30, 24, 18, 0.85); }
   `;
   D.head.appendChild(style);
 
@@ -28,7 +31,7 @@ jQuery(async () => {
   function getState(el) {
     let st = states.get(el);
     if (!st) {
-      st = { el, stack: [el.value], last: el.value, timer: null, group: null, silent: false };
+      st = { el, stack: [el.value], last: el.value, timer: null, group: null, mode: null, silent: false };
       states.set(el, st);
     }
     return st;
@@ -94,24 +97,52 @@ jQuery(async () => {
     if (D.activeElement === el) el.blur(); // 顺手收起键盘
   }
 
-  // ───────── 找原生的「放大键」，把按键塞在它旁边 ─────────
+  // ───────── 判断与定位 ─────────
+  const isVisible = (el) => el.getClientRects().length > 0 && getComputedStyle(el).visibility !== 'hidden';
+
+  function eligible(ta) {
+    if (ta.id === 'send_textarea' || ta.id === 'curEditTextarea') return false;
+    if (ta.closest('#send_form, .mes, .eg-group')) return false;
+    if (ta.disabled) return false;
+    return true;
+  }
+
+  // 找 textarea 前面最近的、看得见的原生放大键(中间不能隔着别的 textarea)
   function findAnchor(ta) {
-    const scope = ta.closest('dialog, .popup');
-    if (ta.id) {
-      const m = D.querySelector('.editor_maximize[data-for="' + CSS.escape(ta.id) + '"]');
-      if (m && m.closest('dialog, .popup') === scope) return m;
-    }
-    // 往上找：在 textarea 前面、且中间没隔着别的 textarea 的最近一个放大键
     let level = ta.parentElement;
     for (let i = 0; i < 6 && level; i++) {
       const list = level.querySelectorAll('textarea, .editor_maximize');
       const idx = Array.prototype.indexOf.call(list, ta);
       for (let j = idx - 1; j >= 0; j--) {
-        if (list[j].tagName === 'TEXTAREA') return null;
-        if (list[j].classList.contains('editor_maximize')) return list[j];
+        const x = list[j];
+        if (x.tagName === 'TEXTAREA') return null;
+        if (x.closest('.eg-group')) continue;
+        if (isVisible(x)) return x;
       }
       if (level.matches('dialog, .popup, body')) break;
       level = level.parentElement;
+    }
+    return null;
+  }
+
+  // 决定这个文本框的按键放哪：
+  //  overlay = 展开成大浮层的编辑框(脚本编辑器) → 框内右下角
+  //  anchor  = 紧挨原生放大键右边
+  //  below   = 放大弹窗(里面只有这一个框) → 框下方右侧
+  //  above   = 其他弹窗里没有放大键的框(如正则) → 框上方右侧
+  function computePlacement(ta) {
+    const dlg = ta.closest('dialog, .popup');
+    const r = ta.getBoundingClientRect();
+    const pos = getComputedStyle(ta).position;
+    if (dlg && !ta.readOnly && (pos === 'absolute' || pos === 'fixed') && r.height > window.innerHeight * 0.5) {
+      return { mode: 'overlay' };
+    }
+    const a = findAnchor(ta);
+    if (a) return { mode: 'anchor', ref: a };
+    if (dlg && !ta.readOnly) {
+      const vis = Array.from(dlg.querySelectorAll('textarea')).filter((t) => eligible(t) && isVisible(t));
+      if (vis.length === 1) return { mode: 'below' };
+      if (r.height >= 70) return { mode: 'above' };
     }
     return null;
   }
@@ -126,47 +157,96 @@ jQuery(async () => {
     return g;
   }
 
-  function eligible(ta) {
-    if (ta.id === 'send_textarea' || ta.id === 'curEditTextarea') return false;
-    if (ta.closest('#send_form, .mes, .eg-group')) return false;
-    if (ta.readOnly || ta.disabled) return false;
-    return true;
+  function removeGroup(st) {
+    if (st.group) st.group.remove();
+    st.group = null;
+    st.mode = null;
   }
 
-  function bind(ta) {
-    if (!eligible(ta)) return;
-    const st = getState(ta);
-    if (st.group && st.group.isConnected) return;
-    const group = makeGroup(st);
-    st.group = group;
-    const anchor = findAnchor(ta);
-    if (anchor) {
-      anchor.insertAdjacentElement('afterend', group);          // 紧挨着原生放大键
-    } else {
-      group.classList.add('eg-row');                            // 没有放大键(比如放大后的弹窗) → 文本框上方一小排
-      ta.insertAdjacentElement('beforebegin', group);
+  function positionOverlay(st) {
+    const g = st.group, ta = st.el;
+    if (!g) return;
+    const op = g.offsetParent || D.body;
+    const o = op.getBoundingClientRect();
+    const t = ta.getBoundingClientRect();
+    const w = g.offsetWidth || 80, h = g.offsetHeight || 34;
+    const left = t.right - o.left - (op.clientLeft || 0) + (op === D.body ? 0 : op.scrollLeft) - w - 34;
+    const top = t.bottom - o.top - (op.clientTop || 0) + (op === D.body ? 0 : op.scrollTop) - h - 10;
+    g.style.left = left + 'px';
+    g.style.top = top + 'px';
+  }
+
+  function place(st) {
+    const ta = st.el;
+    const p = computePlacement(ta);
+    if (!p) { removeGroup(st); return; }
+
+    let g = st.group;
+    if (g && g.isConnected && st.mode === p.mode) {
+      if (p.mode === 'anchor' && p.ref.nextElementSibling === g) return;
+      if (p.mode === 'above' && ta.previousElementSibling === g) return;
+      if (p.mode === 'below' && ta.nextElementSibling === g) return;
+      if (p.mode === 'overlay' && ta.nextElementSibling === g) { positionOverlay(st); return; }
     }
+
+    if (p.mode === 'anchor') {
+      const nxt = p.ref.nextElementSibling;
+      // 这个放大键旁边已经有别的文本框的按键了 → 不重复放
+      if (nxt && nxt !== g && nxt.classList.contains('eg-group') && nxt._eg && nxt._eg.group === nxt) { removeGroup(st); return; }
+    }
+
+    if (!g) { g = makeGroup(st); st.group = g; }
+    g.className = 'eg-group';
+    g.removeAttribute('style');
+
+    if (p.mode === 'anchor') {
+      p.ref.insertAdjacentElement('afterend', g);
+    } else if (p.mode === 'above') {
+      g.classList.add('eg-row');
+      ta.insertAdjacentElement('beforebegin', g);
+    } else if (p.mode === 'below') {
+      g.classList.add('eg-row');
+      ta.insertAdjacentElement('afterend', g);
+    } else if (p.mode === 'overlay') {
+      g.classList.add('eg-float');
+      ta.insertAdjacentElement('afterend', g);
+      positionOverlay(st);
+    }
+    st.mode = p.mode;
     refresh(st);
   }
 
   function scan() {
-    D.querySelectorAll('textarea').forEach(bind);
+    // 清掉游离的按键(比如被酒馆整块克隆出来、已经失去绑定的)
+    D.querySelectorAll('.eg-group').forEach((g) => {
+      if (!g._eg || g._eg.group !== g) g.remove();
+    });
+    D.querySelectorAll('textarea').forEach((ta) => {
+      if (!eligible(ta)) return;
+      if (!isVisible(ta)) {                 // 看不见的(模板、折叠起来的)一律不放，避免重复
+        const old = states.get(ta);
+        if (old && old.group) removeGroup(old);
+        return;
+      }
+      place(getState(ta));
+    });
   }
 
   let scanTimer = null;
-  const schedule = () => { clearTimeout(scanTimer); scanTimer = setTimeout(scan, 150); };
+  const schedule = (ms) => { clearTimeout(scanTimer); scanTimer = setTimeout(scan, ms || 150); };
 
   new MutationObserver((muts) => {
     for (const m of muts) {
       for (const n of m.addedNodes) {
         if (n.nodeType !== 1) continue;
-        if (n.tagName === 'TEXTAREA' || (n.querySelector && n.querySelector('textarea'))) { schedule(); return; }
+        if (n.tagName === 'TEXTAREA' || (n.querySelector && n.querySelector('textarea'))) { schedule(150); return; }
       }
     }
   }).observe(D.body, { childList: true, subtree: true });
 
-  // 兜底：酒馆有时只重绘标题行不动文本框，这里每2秒补一次
-  setInterval(() => { if (!D.hidden) scan(); }, 2000);
+  setInterval(() => { if (!D.hidden) scan(); }, SCAN_INTERVAL);
+  window.addEventListener('resize', () => schedule(200));
+  D.addEventListener('click', () => schedule(300), true); // 点了展开/折叠之类的按钮后，马上重新摆放
   scan();
 
   // ───────── 记录历史 ─────────
@@ -208,7 +288,7 @@ jQuery(async () => {
     e.stopPropagation(); // 防止触发所在折叠标题栏的展开/收起
     const g = b.closest('.eg-group');
     const st = g && g._eg;
-    if (!st) return;
+    if (!st) { if (g) g.remove(); return; }
     if (b.dataset.act === 'undo') undo(st);
     else if (b.dataset.act === 'save') save(st);
   }, true);
