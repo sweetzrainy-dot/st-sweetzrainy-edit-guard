@@ -1,5 +1,5 @@
 jQuery(async () => {
-  console.log('[编辑保镖] v3.1 已加载');
+  console.log('[编辑保镖] v3.2 已加载');
   const D = document;
   const MAX_HISTORY = 50;      // 每个文本框最多保留的历史版本数
   const DEBOUNCE = 1200;       // 停止输入多久后记一个版本(毫秒)
@@ -26,12 +26,13 @@ jQuery(async () => {
   D.head.appendChild(style);
 
   // ───────── 每个文本框的状态 ─────────
+  // stack = 往回退用的历史版本；redo = 撤销过的版本(往前重做用)
   const states = new WeakMap();
 
   function getState(el) {
     let st = states.get(el);
     if (!st) {
-      st = { el, stack: [el.value], last: el.value, timer: null, group: null, mode: null, silent: false };
+      st = { el, stack: [el.value], redo: [], last: el.value, timer: null, group: null, mode: null, silent: false };
       states.set(el, st);
     }
     return st;
@@ -45,26 +46,26 @@ jQuery(async () => {
   function refresh(st) {
     if (!st.group) return;
     const top = st.stack[st.stack.length - 1];
-    const can = st.stack.length > 1 || st.el.value !== top;
+    const canUndo = st.stack.length > 1 || st.el.value !== top;
+    const canRedo = st.redo.length > 0 && st.el.value === top;
     const u = st.group.querySelector('.eg-undo');
-    if (u) u.classList.toggle('eg-off', !can);
+    if (u) u.classList.toggle('eg-off', !canUndo);
+    const r = st.group.querySelector('.eg-redo');
+    if (r) r.classList.toggle('eg-off', !canRedo);
   }
 
   function push(st) {
     const v = st.el.value;
     if (st.stack[st.stack.length - 1] === v) { refresh(st); return; }
     st.stack.push(v);
+    st.redo.length = 0; // 有了新内容，之前可重做的分支就作废了
     if (st.stack.length > MAX_HISTORY) st.stack.shift();
     st.last = v;
     refresh(st);
   }
 
-  function undo(st) {
+  function setValue(st, v) {
     const el = st.el;
-    push(st); // 先把当前内容记下来，再回退
-    if (st.stack.length <= 1) { toast('warning', '没有更早的版本了'); return; }
-    st.stack.pop();
-    const v = st.stack[st.stack.length - 1];
     st.silent = true;
     el.value = v;
     st.last = v;
@@ -72,7 +73,26 @@ jQuery(async () => {
     fire(el);
     st.silent = false;
     refresh(st);
+  }
+
+  function undo(st) {
+    clearTimeout(st.timer);
+    push(st); // 先把当前内容记下来，再回退
+    if (st.stack.length <= 1) { toast('warning', '没有更早的版本了'); return; }
+    const cur = st.stack.pop();
+    st.redo.push(cur);
+    setValue(st, st.stack[st.stack.length - 1]);
     toast('info', '已撤销');
+  }
+
+  function redo(st) {
+    clearTimeout(st.timer);
+    push(st); // 如果撤销后又改了内容，这里会把重做记录清掉
+    if (!st.redo.length) { toast('warning', '没有可以重做的版本了'); return; }
+    const v = st.redo.pop();
+    st.stack.push(v);
+    setValue(st, v);
+    toast('info', '已重做');
   }
 
   function flash(st) {
@@ -161,6 +181,7 @@ jQuery(async () => {
     g.className = 'eg-group';
     g.innerHTML =
       '<i class="fa-solid fa-rotate-left right_menu_button eg-btn eg-undo" title="撤销" data-act="undo"></i>' +
+      '<i class="fa-solid fa-rotate-right right_menu_button eg-btn eg-redo" title="重做" data-act="redo"></i>' +
       '<i class="fa-solid fa-floppy-disk right_menu_button eg-btn eg-save" title="保存" data-act="save"></i>';
     g._eg = st;
     return g;
@@ -178,7 +199,7 @@ jQuery(async () => {
     const op = g.offsetParent || D.body;
     const o = op.getBoundingClientRect();
     const t = ta.getBoundingClientRect();
-    const w = g.offsetWidth || 80, h = g.offsetHeight || 34;
+    const w = g.offsetWidth || 110, h = g.offsetHeight || 34;
     const left = t.right - o.left - (op.clientLeft || 0) + (op === D.body ? 0 : op.scrollLeft) - w - 34;
     const top = t.bottom - o.top - (op.clientTop || 0) + (op === D.body ? 0 : op.scrollTop) - h - 10;
     g.style.left = left + 'px';
@@ -270,7 +291,7 @@ jQuery(async () => {
     const st = states.get(e.target);
     if (!st) return;
     // 值被酒馆换掉了(比如切换了角色/条目) → 丢掉旧历史，避免撤销到别人的内容
-    if (st.el.value !== st.last) st.stack = [st.el.value];
+    if (st.el.value !== st.last) { st.stack = [st.el.value]; st.redo = []; }
     st.last = st.el.value;
     refresh(st);
   }, true);
@@ -280,6 +301,7 @@ jQuery(async () => {
     if (!st) return;
     st.last = st.el.value;
     if (st.silent) return;
+    st.redo.length = 0; // 手动改了内容，重做记录作废
     refresh(st);
     clearTimeout(st.timer);
     st.timer = setTimeout(() => push(st), DEBOUNCE);
@@ -306,6 +328,7 @@ jQuery(async () => {
     const st = g && g._eg;
     if (!st) { if (g) g.remove(); return; }
     if (b.dataset.act === 'undo') undo(st);
+    else if (b.dataset.act === 'redo') redo(st);
     else if (b.dataset.act === 'save') save(st);
   }, true);
 });
